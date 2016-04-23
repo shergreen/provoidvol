@@ -48,14 +48,9 @@ using namespace bmpg_uncc_edu::util::logger;
 // Macros
 #define SQR(x)      ((x)*(x))                        // x^2 
 
-
-    
-    int voidHist[120000000] = {0};
-    int microvoidHist[120000000] = {0};    
-
-
 const float maxR_ss = 1.8; //this will change depending on input set of vdw radii, largest one in set       
 const float hashSpacing = 3.0;
+const int global_rotation_max = 10;
 
 //spring model parameters
 int maxIter = 1000;//1000; //just to ensure that our spring models eventually converge
@@ -74,8 +69,10 @@ int atoms; float ** atomCoords;
 //hashmaps used throughout
 int *** hashGrid; int * gridChain; int L; //dimensionality of atom hashgrid
 
+int voidHist[120000000] = {0};
+int microvoidHist[120000000] = {0};  
 
-const int global_rotation_max = 100;
+
 int global_rot_iter; //needs to be global so we can store in arrays
 float glob_prot_vol_gdpts[global_rotation_max]={0}; float glob_mv_gdpts[global_rotation_max]={0}; float glob_cav_gdpts[global_rotation_max]={0}; float glob_solv_gdpts[global_rotation_max]={0};
 float glob_mv_clusters[global_rotation_max]={0}; float glob_cav_clusters[global_rotation_max]={0}; float glob_cav_cluster_errors[global_rotation_max]={0};
@@ -87,44 +84,6 @@ float old_vdw_radii[100] = {0}; float original_vdw_radii[100] = {0}; float new_v
 
 int largestVoid = 0; int largestMicrovoid = 0;
 
-
-/*
-void userInput(int argc, char** argv){
-    //bring in parameters from command line
-    int c;
-    while ((c = getopt (argc, argv, "n:a:p:z:c:")) != -1)
-    switch (c){
-        case 'n':
-            pdb_file_name = optarg;
-            break;
-        case 'a':
-            a_grid = atof(optarg);
-            break;
-        case 'p':
-            R_probe = atof(optarg);            
-            R_bw = R_probe * 4.0;//6.0; //angstroms of boundary water
-            solvGap = ceil(a_grid+maxR_ss+R_bw); 
-            R_check = (R_probe + maxR_ss) + 0.51*a_grid; //for checking in geometrical method
-            R_cap = R_probe + 1.7321*a_grid;
-            targetR_probe = R_probe * 1.10;           
-            break;       
-        case 'c':
-            connectivity_type = optarg;
-            if (optarg == "H"){
-                connect_num = 7;
-            }
-            else if(optarg == "L"){
-                connect_num = 3;
-            }
-            else{
-                connect_num = 7; //default to High connectivity
-            }
-            break;
-        default:
-            abort();
-    }
-}
-*/
 
 //requires that PDB files be minimized and protonated
 int atomCount(PDBProtein *protein) {
@@ -339,7 +298,6 @@ void generateHash(){
     }
 }
 
-
 //destroys hash grid as well as cluster labels
 void destroyHash(){
     for(int i=0; i<L; i++){
@@ -351,7 +309,6 @@ void destroyHash(){
     delete [] hashGrid;
     delete [] gridChain;
 }
-
 
 
 //if this returns 0, then the gridpoint is farther than input distance (sqDistCheck) from atom, returns 1 then within range, cell is occupied
@@ -547,7 +504,6 @@ int voidType(float x, float y, float z, float probe){
         return 1; //grid point volume is part of void space 
     }
 }
-
 
 
 // uf_find returns the canonical label for the equivalence class containing x
@@ -835,26 +791,6 @@ float clusterSizeCounter(int minVoidSize, float probe, float grid){
    
     return (microvoid+voidvol+proteinVol)*pow(grid,3.0);    
 }
-/*
-void histogramGenerator(ostringstream probeString, ostringstream gridString){
-    voidHistFile.open((pdb_file_name+"-a_grid"+gridString.str()+"-Rprobe"+probeString.str()+"-voidHist.txt").c_str());
-    microvoidHistFile.open ((pdb_file_name+"-a_grid"+gridString.str()+"-Rprobe"+probeString.str()+"-microvoidHist.txt").c_str());
-    for(int j = 1; j <=largestVoid; j++){
-        if(voidHist[j] > 0){
-            voidHistFile << j << " " << voidHist[j] << "\n";
-        }
-    }
-    for(int j = 1; j <=largestMicrovoid; j++){
-        if(microvoidHist[j] > 0){
-            microvoidHistFile << j << " " << microvoidHist[j] << "\n";
-        }
-    }
-    microvoidHistFile.close();
-    voidHistFile.close();
-}
-
-*/
-
 
 void finalDataCollectionRun(float probe, float grid, string PDBFileName){
     
@@ -920,9 +856,6 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
         voidHist[c] = 0;
     }
     
-//    histogramGenerator(gridString, rationString); // using aggregate cluster statistics instead of single cluster statistics, print to two hist files
-   
-
     //avgs
     float prot_vol_gdpts_avg = 0; float mv_gdpts_avg = 0; float cav_gdpts_avg = 0;
     float solv_gdpts_avg = 0; float mv_clusters_avg = 0; float cav_clusters_avg = 0;
@@ -1046,44 +979,45 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
 
     
     delete [] clusterLabel; delete [] clusterSize;
-        
-    //finally we close our files
-    
     summaryFile.close();
     largestMVFile.close();
 }
 
-/*
-void basicRun(){
-    clock_t algorithmTime;
-    //basic algorithm
-    algorithmTime = clock(); //begin timing our algorithm
-    generateHash(); //make our hash coded map of atoms
-    hoshenKopelman(); //propagate through our grid - percolation
-    clusterSizeCounter(); //process void and microvoid statistics
-    algorithmTime = clock() - algorithmTime;
-    printf ("Algorithm Processing time: %d clicks (%f seconds).\n",(int)algorithmTime,((float)algorithmTime)/CLOCKS_PER_SEC);
-    destroyHash();
-}
-*/
 
 int main(int argc, char** argv) {    
     clock_t importTime; 
     importTime = clock();
     
-    float grid = 0.5;    
+    float grid=0.5;
+    float probe=1.4;
     string PDBFileName;
     
-    PDBFileName = "1cxyh";
+    int c;
+    while ((c = getopt (argc, argv, "n:g:p:")) != -1)
+    switch (c){
+        case 'n':
+            PDBFileName = optarg;
+            cout << "PDB: " << PDBFileName << "\n";
+            break;
+        case 'g':
+            grid = atof(optarg);
+            cout << "grid: " << grid << "\n";
+            break;
+        case 'p':
+            probe = atof(optarg);            
+            cout << "probe: " << probe << "\n";
+            break;       
+        default:
+            abort();
+    }
+        
     getAtomCoords(PDBFileName);       
     importTime = clock() - importTime;
     printf ("Protein import took %d clicks (%f seconds).\n",(int)importTime,((float)importTime)/CLOCKS_PER_SEC);
     
-    for (float probe = 0.5; probe <= 4.0; probe += 0.1) {
-        float solvGap = ceil(grid + maxR_ss + probe*4);
-        firstQuadCoordShift(solvGap);
-        finalDataCollectionRun(probe, grid, PDBFileName);
-    }
-    
+    float solvGap = ceil(grid + maxR_ss + probe*4);
+    firstQuadCoordShift(solvGap);
+    finalDataCollectionRun(probe, grid, PDBFileName);
+        
     return 0;
 }
