@@ -52,7 +52,7 @@ using namespace bmpg_uncc_edu::util::logger;
 
 const float maxR_ss = 1.8; //this will change depending on input set of vdw radii, largest one in set       
 const float hashSpacing = 3.0;
-const int global_rotation_max = 10;
+const int global_rotation_max = 5;
 
 //spring model parameters
 int maxIter = 1000;//1000; //just to ensure that our spring models eventually converge
@@ -85,6 +85,7 @@ float glob_total_vol[global_rotation_max]={0}; float glob_packing_density[global
 float old_vdw_radii[100] = {0}; float original_vdw_radii[100] = {0}; float new_vdw_radii[100] = {0}; int vdwTypes = 0;
 
 int largestVoid = 0; int largestMicrovoid = 0;
+int rotLargestMV = 0; int rotLargestVoid = 0;
 
 
 //requires that PDB files be minimized and protonated
@@ -719,7 +720,8 @@ float clusterSizeCounter(int minVoidSize, float probe, float grid){
     int i = 2; int voidvol = 0; int microvoid = 0; 
     int largestVoidInd = 0;
     int largestMicrovoidInd = 0;
-    int largestMicrovoid = 0;
+    rotLargestMV = 0;
+    rotLargestVoid = 0;
     int numberOfVoids = 0; int numberOfMicrovoids = 0;
     int numOfErrorGdpts = 0;
     //pull boundary water volume from its high valued canonical label back into label 1
@@ -732,9 +734,9 @@ float clusterSizeCounter(int minVoidSize, float probe, float grid){
             if(clusterSize[i] >= minVoidSize){ //if the void is big enough (no false positive voids that are actually microvoids)
                 voidvol = voidvol + clusterSize[i];
                 numberOfVoids++;
-                if(clusterSize[i] > largestVoid){
+                if(clusterSize[i] > rotLargestVoid){
                     largestVoidInd = i;
-                    largestVoid = clusterSize[i];
+                    rotLargestVoid = clusterSize[i];
                 }
             }else{ //its a false positive
                 numOfErrorGdpts = numOfErrorGdpts + clusterSize[i]; //add to number of error points
@@ -747,16 +749,16 @@ float clusterSizeCounter(int minVoidSize, float probe, float grid){
         else if(clusterSize[i] < 0){
             microvoid = microvoid - clusterSize[i]; //because negative
             numberOfMicrovoids++;
-            if(clusterSize[i] < largestMicrovoid){
+            if(clusterSize[i] < rotLargestMV){
                 largestMicrovoidInd = i;
-                largestMicrovoid = clusterSize[i];
+                rotLargestMV = clusterSize[i];
             }
         }
         
         i++;
 
     }
-    largestMicrovoid = -1*largestMicrovoid;
+    rotLargestMV = -1*rotLargestMV;
    //final void counter:
     int totalVol = clusterSize[0] + microvoid + voidvol; //used to determine packing density.
     int boundaryWater = clusterSize[1];
@@ -766,8 +768,8 @@ float clusterSizeCounter(int minVoidSize, float probe, float grid){
     cout << "Number of Microvoids: " << numberOfMicrovoids << "\n";
     cout << "Protein Volume = " << clusterSize[0] << " gridpoints,   " << setprecision(3) << clusterSize[0]*pow(grid,3.0) << " angstroms cubed.\n";
     cout << "Boundary Water Volume = " << boundaryWater << " gridpoints,   " << setprecision(3) << clusterSize[1]*pow(grid,3.0) << " angstroms cubed.\n";
-    cout << "Largest Void Volume = " << largestVoidInd << " " << setprecision(3) << largestVoid*pow(grid,3.0) << " angstroms cubed.\n";
-    cout << "Largest Microvoid Volume = " << largestMicrovoidInd << " " << setprecision(3) << largestMicrovoid*pow(grid,3.0) << " angstroms cubed.\n";
+    cout << "Largest Void Volume = " << largestVoidInd << " " << setprecision(3) << rotLargestVoid*pow(grid,3.0) << " angstroms cubed.\n";
+    cout << "Largest Microvoid Volume = " << largestMicrovoidInd << " " << setprecision(3) << rotLargestMV*pow(grid,3.0) << " angstroms cubed.\n";
     cout << "Void volume: " << voidvol << " gridpoints,   " << setprecision(3) << voidvol*pow(grid,3.0) << " angstroms cubed.\n";
     cout << "Microvoid volume: " << microvoid << " gridpoints,   " << setprecision(3) << microvoid*pow(grid,3.0) << " angstroms cubed.\n";
     cout << "Void + Microvoid: " << setprecision(3) << (microvoid+voidvol)*pow(grid,3.0) << " angstroms cubed.\n";
@@ -782,8 +784,8 @@ float clusterSizeCounter(int minVoidSize, float probe, float grid){
     glob_mv_clusters[global_rot_iter] = numberOfMicrovoids; 
     glob_cav_clusters[global_rot_iter] = numberOfVoids; 
     glob_cav_cluster_errors[global_rot_iter] = numOfErrorGdpts;
-    glob_largest_mv_gdpts[global_rot_iter] = largestMicrovoid; 
-    glob_largest_cav_gdpts[global_rot_iter] = largestVoid; 
+    glob_largest_mv_gdpts[global_rot_iter] = rotLargestMV; 
+    glob_largest_cav_gdpts[global_rot_iter] = rotLargestVoid; 
     glob_gdpts_total[global_rot_iter] = clusterSize[0]+clusterSize[1]+voidvol+microvoid; //void+microvoid+protein+solvent
     glob_prot_vol[global_rot_iter] = clusterSize[0]*pow(grid,3.0); 
     glob_mv_vol[global_rot_iter] = microvoid*pow(grid,3.0); 
@@ -792,6 +794,15 @@ float clusterSizeCounter(int minVoidSize, float probe, float grid){
     glob_total_vol[global_rot_iter] = (clusterSize[0]+clusterSize[1]+voidvol+microvoid)*pow(grid,3.0); 
     glob_packing_density[global_rot_iter] = (float)clusterSize[0] / totalVol; //in this case, total volume is the void+microvoid+protein, EXCLUDING solvent accessibility
    
+
+    //assigning to our global largest mv and void
+    if(rotLargestMV > largestMicrovoid){
+        largestMicrovoid = rotLargestMV;
+    }
+    if(rotLargestVoid > largestVoid){
+        largestVoid = rotLargestVoid;
+    }
+
     return (microvoid+voidvol+proteinVol)*pow(grid,3.0);    
 }
 
@@ -829,7 +840,8 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
             }
         }
         maxCluster = 1;
-        largestMVFile << largestMicrovoid << "\n"; //ultimately a list of 100 largest microvoids
+        largestMVFile << rotLargestMV << "\n"; //ultimately a list of 100 largest microvoids
+        delete [] clusterLabel; delete [] clusterSize; //need to remove after each rotation
         glob_cpu_time[global_rot_iter] = ((float)algorithmTime)/CLOCKS_PER_SEC;
         rotateCoords(solvGap); //rotate for the next time through to run again with new values
         destroyHash(); //since we will be making it again, we need to destroy the memory first
@@ -981,7 +993,6 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
     summaryFile << cpu_time_avg << " " << cpu_time_stderr << "\n";
 
     
-    delete [] clusterLabel; delete [] clusterSize;
     summaryFile.close();
     largestMVFile.close();
 }
