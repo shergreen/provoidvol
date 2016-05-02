@@ -1,3 +1,5 @@
+
+
 /* 
  * File:   main.cpp
  * Author: Sheridan Beckwith Green (sbg@unc.edu)
@@ -717,6 +719,7 @@ float clusterSizeCounter(int minVoidSize, float probe, float grid){
     int i = 2; int voidvol = 0; int microvoid = 0; 
     int largestVoidInd = 0;
     int largestMicrovoidInd = 0;
+    int largestMicrovoid = 0;
     int numberOfVoids = 0; int numberOfMicrovoids = 0;
     int numOfErrorGdpts = 0;
     //pull boundary water volume from its high valued canonical label back into label 1
@@ -1011,6 +1014,12 @@ int main(int argc, char** argv) {
             abort();
     }
         
+    if (probe < grid) {
+        cout << "probe cannot be less than grid\n";
+        return 0;
+    }
+    
+    
     getAtomCoords(PDBFileName);       
     importTime = clock() - importTime;
     printf ("Protein import took %d clicks (%f seconds).\n",(int)importTime,((float)importTime)/CLOCKS_PER_SEC);
