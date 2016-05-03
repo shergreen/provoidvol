@@ -52,7 +52,7 @@ using namespace bmpg_uncc_edu::util::logger;
 
 const float maxR_ss = 1.8; //this will change depending on input set of vdw radii, largest one in set       
 const float hashSpacing = 3.0;
-const int global_rotation_max = 5;
+const int global_rotation_max = 20;
 
 //spring model parameters
 int maxIter = 1000;//1000; //just to ensure that our spring models eventually converge
@@ -71,9 +71,10 @@ int atoms; float ** atomCoords;
 //hashmaps used throughout
 int *** hashGrid; int * gridChain; int L; //dimensionality of atom hashgrid
 
-int voidHist[120000000] = {0};
-int microvoidHist[120000000] = {0};  
 
+
+//int voidHist[120000000] = {0};
+//int microvoidHist [120000000] = {0};  
 
 int global_rot_iter; //needs to be global so we can store in arrays
 float glob_prot_vol_gdpts[global_rotation_max]={0}; float glob_mv_gdpts[global_rotation_max]={0}; float glob_cav_gdpts[global_rotation_max]={0}; float glob_solv_gdpts[global_rotation_max]={0};
@@ -821,6 +822,15 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
     voidHistFile.open((PDBFileName + "-a" + gridString.str() + "-ratio" + ratioString.str() + "-"+connectivity_type +"-voidHist.txt").c_str());
     microvoidHistFile.open ((PDBFileName+"-a"+gridString.str()+"-ratio"+ratioString.str()+"-" + connectivity_type +"-microvoidHist.txt").c_str());
     
+    vector <int> voidHist;
+    vector <int> microvoidHist;  
+    largestVoid = 0;
+    largestMicrovoid = 0;
+    
+    
+//    voidHist.reserve(120000);
+//    microvoidHist.reserve(120000);
+    
     int minVoidSize  = ceil((4.0/3.0)*M_PI*(probe*probe*probe)/(grid*grid*grid)); //smallest size a void can be, removes problem voids
     float solvGap = ceil(grid + maxR_ss + probe*4);   
     clock_t algorithmTime;
@@ -830,7 +840,13 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
         hoshenKopelman(solvGap, probe, grid); //propagate through our grid - percolation
         clusterSizeCounter(minVoidSize, probe, grid ); //process void and microvoid statistics, prints out largest mv to largest mv cluster file
         algorithmTime = clock() - algorithmTime; //total alg. time includes hash generation, HK algorithm, and final cluster counting
-        //histogram generator
+        
+        if (voidHist.size() < rotLargestVoid) {
+            voidHist.resize(rotLargestVoid + 1, 0);
+        }
+        if (microvoidHist.size() < rotLargestMV) {
+            microvoidHist.resize(rotLargestMV + 1, 0);
+        }
         for(int i = 2; i <= maxCluster; i++){
             if(clusterSize[i] > 0){
                 voidHist[clusterSize[i]] ++;
@@ -847,12 +863,14 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
         destroyHash(); //since we will be making it again, we need to destroy the memory first
     }
         
+    cout << "largestvoid:" << largestVoid << "\n";
     
     for(int j = 1; j <= largestVoid; j++){
         if(voidHist[j] > 0){
             voidHistFile << j << " " << voidHist[j] << "\n";
         }
     }
+    cout << "largestmicrovoid:" << largestMicrovoid << "\n";
     for(int j = 1; j <= largestMicrovoid; j++){
         if(microvoidHist[j] > 0){
             microvoidHistFile << j << " " << microvoidHist[j] << "\n";
@@ -866,10 +884,13 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
 //    microvoidHist[120000000] = {0};
 //    voidHist[120000000] = {0};
   
-    for (int c = 0; c < 120000000; c++) {
-        microvoidHist[c] = 0;
-        voidHist[c] = 0;
-    }
+//    for (int c = 0; c < 120000; c++) {
+//        microvoidHist[c] = 0;
+//        voidHist[c] = 0;
+//    }
+    
+    microvoidHist.clear();
+    voidHist.clear();  
     
     //avgs
     float prot_vol_gdpts_avg = 0; float mv_gdpts_avg = 0; float cav_gdpts_avg = 0;
@@ -1029,15 +1050,21 @@ int main(int argc, char** argv) {
         cout << "probe cannot be less than grid\n";
         return 0;
     }
+   
     
+//    string PDBFileName = "1notH.pdb";
     
     getAtomCoords(PDBFileName);       
     importTime = clock() - importTime;
     printf ("Protein import took %d clicks (%f seconds).\n",(int)importTime,((float)importTime)/CLOCKS_PER_SEC);
     
+    
+//    for (float grid = 0.1; grid <= 1.5; grid += 0.1) {
+//    for (float probe = grid; probe <= 2.5; probe += 0.1) {        
     float solvGap = ceil(grid + maxR_ss + probe*4);
     firstQuadCoordShift(solvGap);
     finalDataCollectionRun(probe, grid, PDBFileName);
-        
+//    }
+//    }
     return 0;
 }
