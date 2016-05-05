@@ -827,10 +827,7 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
     largestVoid = 0;
     largestMicrovoid = 0;
     
-    
-//    voidHist.reserve(120000);
-//    microvoidHist.reserve(120000);
-    
+        
     int minVoidSize  = ceil((4.0/3.0)*M_PI*(probe*probe*probe)/(grid*grid*grid)); //smallest size a void can be, removes problem voids
     float solvGap = ceil(grid + maxR_ss + probe*4);   
     clock_t algorithmTime;
@@ -841,10 +838,10 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
         clusterSizeCounter(minVoidSize, probe, grid ); //process void and microvoid statistics, prints out largest mv to largest mv cluster file
         algorithmTime = clock() - algorithmTime; //total alg. time includes hash generation, HK algorithm, and final cluster counting
         
-        if (voidHist.size() < rotLargestVoid) {
+        if (voidHist.size() <= rotLargestVoid) {
             voidHist.resize(rotLargestVoid + 1, 0);
         }
-        if (microvoidHist.size() < rotLargestMV) {
+        if (microvoidHist.size() <= rotLargestMV) {
             microvoidHist.resize(rotLargestMV + 1, 0);
         }
         for(int i = 2; i <= maxCluster; i++){
@@ -880,15 +877,7 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
     
     microvoidHistFile.close();
     voidHistFile.close();
-        
-//    microvoidHist[120000000] = {0};
-//    voidHist[120000000] = {0};
-  
-//    for (int c = 0; c < 120000; c++) {
-//        microvoidHist[c] = 0;
-//        voidHist[c] = 0;
-//    }
-    
+            
     microvoidHist.clear();
     voidHist.clear();  
     
