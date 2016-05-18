@@ -71,7 +71,7 @@ int atoms; float ** atomCoords;
 //hashmaps used throughout
 int *** hashGrid; int * gridChain; int L; //dimensionality of atom hashgrid
 
-
+int residueCount;
 
 //int voidHist[120000000] = {0};
 //int microvoidHist [120000000] = {0};  
@@ -225,6 +225,9 @@ void getAtomCoords(string PDBFileName) {
     
     //find number of atoms
     atoms = atomCount(protein);
+
+    //get number of residues;
+    residueCount = protein->num_residues();
     
     
     //make pointer to atomCoords 2d array:x,y,z coordinates
@@ -1001,6 +1004,7 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
     summaryFile << total_vol_avg << " " << total_vol_stderr << "\n";
     summaryFile << packing_density_avg << " " << packing_density_stderr << "\n";
     summaryFile << cpu_time_avg << " " << cpu_time_stderr << "\n";
+    summaryFile << residueCount << "\n";
 
     
     summaryFile.close();
