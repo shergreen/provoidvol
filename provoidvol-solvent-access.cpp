@@ -52,7 +52,7 @@ using namespace bmpg_uncc_edu::util::logger;
 
 const float maxR_ss = 1.8; //this will change depending on input set of vdw radii, largest one in set       
 const float hashSpacing = 3.0;
-const int global_rotation_max = 25;
+const int global_rotation_max = 1;
 
 //spring model parameters
 int maxIter = 1000;//1000; //just to ensure that our spring models eventually converge
@@ -71,10 +71,10 @@ int atoms; float ** atomCoords;
 //hashmaps used throughout
 int *** hashGrid; int * gridChain; int L; //dimensionality of atom hashgrid
 
-int residueCount;
+int residueCount; int *** solv_access_vols; //contains the volumes of mv, void, solvent per residue, per rotation
+int **** cavityGrid;
 
-//int voidHist[120000000] = {0};
-//int microvoidHist [120000000] = {0};  
+int n[4]; //won't be using n[0]  
 
 int global_rot_iter; //needs to be global so we can store in arrays
 float glob_prot_vol_gdpts[global_rotation_max]={0}; float glob_mv_gdpts[global_rotation_max]={0}; float glob_cav_gdpts[global_rotation_max]={0}; float glob_solv_gdpts[global_rotation_max]={0};
@@ -228,13 +228,24 @@ void getAtomCoords(string PDBFileName) {
 
     //get number of residues;
     residueCount = protein->num_residues();
+    solv_access_vols = (int***) new int** [residueCount+1]; //use first row for totals
+    for(int i=0;i<=residueCount;i++)
+      {
+        solv_access_vols[i] = (int**) new int* [global_rotation_max]; //residues are rows, rotations are columns
+        for(int j=0; j<global_rotation_max; j++){
+            solv_access_vols[i][j] = (int*) new int [3]; //for mv, void, solv
+            for(int k=0; k<3; k++){
+                solv_access_vols[i][j][k] = 0;
+            }
+        }
+      }
     
     
     //make pointer to atomCoords 2d array:x,y,z coordinates
     atomCoords = (float**) new float* [atoms+1]; //0 to atoms
     for(int i=0;i<=atoms;i++)
       {
-        atomCoords[i] = (float*) new float [4]; //0 to 3-> Rss, x,y,z
+        atomCoords[i] = (float*) new float [8]; //0 to 7-> Rss, x,y,z,residue number, #mv, #cavity, #solvent
       }
      //remember to delete this memory after use when running program over many atoms
 
@@ -248,6 +259,8 @@ void getAtomCoords(string PDBFileName) {
             atomCoords[count][1] = a->x;
             atomCoords[count][2] = a->y;
             atomCoords[count][3] = a->z;
+            atomCoords[count][4] = a->res_num;
+            atomCoords[count][5] = atomCoords[count][6] = atomCoords[count][7] = 0;
             //symbol[count] = a->atomic_symbol; //likely no need for this but keep around in case, requires a string array called symbol
             vdw = ff->lookup_coul_vdw_data(a->res, a->atom_name);
             atomCoords[count][0] = vdw->R; //this is Rss.
@@ -330,6 +343,16 @@ int checkDistance(float x1, float y1, float z1, float x2, float y2, float z2, fl
     }
 }
 
+int checkDistance(float x1, float y1, float z1, float x2, float y2, float z2, float distToCheck, float &sq_atom_distance) {
+    sq_atom_distance = (x1-x2)*(x1-x2)+(y1-y2)*(y1-y2)+(z1-z2)*(z1-z2);
+    float sqDistCheck = distToCheck*distToCheck;
+    if (sq_atom_distance <= sqDistCheck){ //if the gridpoint is within VDW radii, we return positive
+        return 1;
+    } else { 
+        return 0;
+    }
+}
+
 //returns the magnitude of a vector
 float mag(float x, float y, float z){
     return sqrt(x*x+y*y+z*z);
@@ -363,12 +386,17 @@ int isNotOccupied(float x, float y, float z){
     return 1; //if no confirmed checks, then the physical space is unoccupied
 }
 
-int isBoundaryWater(float x, float y, float z, float boundaryProbe){
+int isBoundaryWater(float x, float y, float z, float boundaryProbe, int& closest_atom){
     //location of physical gridpoint within our hash grid
     int i = ((int)floor(x / hashSpacing) % L)+L; //add over the mod value to get out of the range of negatives, which mess up mod function
     int j = ((int)floor(y / hashSpacing) % L)+L;
     int k = ((int)floor(z / hashSpacing) % L)+L;
     int atom;
+    int boundaryFlag = 0;
+
+    float sq_closest_distance = FLT_MAX;
+    float sq_atom_distance; //only care about the square of the distance to save time square rooting
+
     int bins = ceil(boundaryProbe / hashSpacing); //since our hash grid is spaced hashSpacing, we check out this many in each direction
     //iterating over all 27 surrounding hash lattice cubes searching for atoms
     for(int i2 = i-bins; i2 <= i+bins; i2++) {
@@ -378,15 +406,20 @@ int isBoundaryWater(float x, float y, float z, float boundaryProbe){
                 if(atom != 0) { //unless there's something in hashGrid here, we move on
                     while(atom != 0){ //start checking through gridChain
                         if(checkDistance(x,y,z,atomCoords[atom][1],atomCoords[atom][2],
-                           atomCoords[atom][3],boundaryProbe)==1){ //atomCoords[atom][0] was 0, but now we have it working!!
-                            return 1; break;}
+                           atomCoords[atom][3],boundaryProbe,sq_atom_distance)==1){ //atomCoords[atom][0] was 0, but now we have it working!!
+                            boundaryFlag = 1;}
                         atom = gridChain[atom];
+                        if(sq_atom_distance <= sq_closest_distance){ //finding the closest atom
+                            sq_closest_distance = sq_atom_distance;
+                            closest_atom = atom;
+                        }
                     }  
                 }
             }
         }
     }
-    return 0; //if no confirmed checks, then the physical space is irrelevant, counts as bulk solvent
+    //if no confirmed checks, then the physical space is irrelevant, counts as bulk solvent
+    return boundaryFlag;
 }
 
 //returns -1 if microvoid and 1 if solvent accessible void
@@ -401,6 +434,11 @@ int voidType(float x, float y, float z, float probe){
     int bins = ceil((2*probe + maxR_ss) / hashSpacing);
     int atomsWithin[1000] = {0}; //contains list of atoms within distance R_ss+2*R_probe (1000 should be large enough)
     int maxAtomsWithin = 0;//keeps track of how many indices are used in this array
+
+    float sq_closest_distance = FLT_MAX;
+    float sq_atom_distance; //only care about the square of the distance to save time square rooting
+    int closest_atom;
+
     //iterating over all 27 surrounding hash lattice cubes searching for atoms
     for(int i2 = i-bins; i2 <= i+bins; i2++) {
         for(int j2 = j-bins; j2 <= j+bins; j2++) {
@@ -409,10 +447,14 @@ int voidType(float x, float y, float z, float probe){
                 if(atom != 0) { //unless there's something in hashGrid here, we move on
                     while(atom != 0){ //start checking through gridChain
                         if(checkDistance(x,y,z,atomCoords[atom][1],atomCoords[atom][2],
-                           atomCoords[atom][3],atomCoords[atom][0]+(2*probe))==1){ //if this gridpoint is within distance of an atom
+                           atomCoords[atom][3],atomCoords[atom][0]+(2*probe),sq_atom_distance)==1){ //if this gridpoint is within distance of an atom
                             atomsWithin[maxAtomsWithin] = atom; maxAtomsWithin++; //store that atoms index
                         }
                         atom = gridChain[atom];
+                        if(sq_atom_distance <= sq_closest_distance){ //finding the closest atom
+                            sq_closest_distance = sq_atom_distance;
+                            closest_atom = atom;
+                        }
                     }  
                 }
             }
@@ -489,7 +531,7 @@ int voidType(float x, float y, float z, float probe){
         
         if(checkDistance(x,y,z,test[1],test[2],
             test[3],probe)==0){ //if the test particle is farther than Rprobe from gridpoint)
-
+            atomCoords[closest_atom][5]++; //add one to the microvoid counter of the nearest atom
             return -1; //this grid point is not part of void space (so microvoid)
         }
         
@@ -505,6 +547,7 @@ int voidType(float x, float y, float z, float probe){
         }
         
         if(E_spring >= E_zero){ //stressed equilibrium
+            atomCoords[closest_atom][5]++; //add one to the microvoid counter of the nearest atom
             return -1; //microvoid space
         }
         //cout << x << " " << y << " " << z << "\n";
@@ -560,6 +603,8 @@ int** propagate(int** prevSlice, int** slice, float z, int xIntervals, int yInte
     int nType[connect_num]; //stores void or microvoid type of neighbor
     int hasJoined; //this will be used to determine what to do for union-find each time through
     int type; //determines solvent accessible or microvoid
+    int closest_atom;
+    int boundaryStatus;
     float boundaryProbe = probe * 4;
     for(int i=1; i<=xIntervals; i++){ //starting at gridpoint one over from edge in x and y, because the outer edges are just solvent
         for(int j=1; j<=yIntervals; j++){
@@ -568,7 +613,7 @@ int** propagate(int** prevSlice, int** slice, float z, int xIntervals, int yInte
              if (!!slice[i][j]) { //if there is NOT an atom here
                  //check whether it is void or microvoid
                  type = voidType(i*grid, j*grid, z, probe);                
-                 
+
                 //if sign positive, solvent accessible void, negative if microvoid
                 neighbors[0] = prevSlice[i][j]; //neighbor below's cluster label, with sign denoting void or microvoid
                 neighbors[1] = slice[i][j-1];//neighbor behind's cluster label; thinking of i as the left to right spacial dimension, (i.e. x) 
@@ -598,8 +643,13 @@ int** propagate(int** prevSlice, int** slice, float z, int xIntervals, int yInte
                                  
                                 slice[i][j] = neighbors[k]; //this gridpoint joins that cluster
                                 if(nType[k]>0){
+                                    boundaryStatus = !!isBoundaryWater(i*grid, j*grid, z, boundaryProbe, closest_atom);
+                                    if(boundaryStatus){ //write the location to the cavityGrid
+                                        cavityGrid[i][j][(int)(z/grid)][0] = closest_atom;
+                                        cavityGrid[i][j][(int)(z/grid)][1] = neighbors[k];
+                                    }
                                     if(uf_find(neighbors[k]) == uf_find(1)){//if cluster 1, check to see if its boundary water
-                                        if(!!isBoundaryWater(i*grid, j*grid, z, boundaryProbe)){ //only needs check here because other voids MUST be within Rbw
+                                        if(boundaryStatus){ //only needs check here because other voids MUST be within Rbw
                                             clusterSize[1]++; //its boundary water
                                         } 
                                     }else{
@@ -645,7 +695,6 @@ int** propagate(int** prevSlice, int** slice, float z, int xIntervals, int yInte
 //can choose to return value of volume when running time statistics
 void hoshenKopelman(float solvGap, float probe, float grid){
     //intervals in each coordinate (for grid construction)
-    int n[4]; //won't be using n[0]
     for(int i=1; i<=3; i++){
         n[i] = ceil(abs(atomCoords[0][i]/grid)) + 2*(solvGap/grid); //4 intervals on each side of min and max for solvent (2 Angstroms on each side)
     }
@@ -665,6 +714,20 @@ void hoshenKopelman(float solvGap, float probe, float grid){
         for(int j=0; j<=n[2]; j++){
             slice1[i][j] = 1;
             slice2[i][j] = 1;
+        }
+    }
+
+    cavityGrid = (int ****) new int***[n[1]+1];
+    for(int i = 0; i<=n[1]; i++){
+        cavityGrid[i] = (int ***) new int**[n[2]+1];
+        for(int j = 0; j<=n[2]; j++){
+            cavityGrid[i][j] = (int **) new int*[n[3]+1];
+            for(int k = 0; k<=n[3]; k++){
+                cavityGrid[i][j][k] = (int *) new int[2]; //nearest atom and cluster
+                for(int l = 0; l<2; l++){
+                    cavityGrid[i][j][k][l] = 0;
+                }
+            }
         }
     }
     
@@ -810,6 +873,50 @@ float clusterSizeCounter(int minVoidSize, float probe, float grid){
     return (microvoid+voidvol+proteinVol)*pow(grid,3.0);    
 }
 
+void residueSum(){
+    //putting the necessary info into solv_access_vols
+    //keep in mind row 0 is not being used, since goes from 0 to residueCount
+    int current_residue;
+    int firstResidue = atomCoords[1][4];
+    for(int atom = 1; atom <= atoms; atom++){
+        current_residue = atomCoords[atom][4]; //residue of the atom
+        solv_access_vols[current_residue - firstResidue + 1][global_rot_iter][0] += atomCoords[atom][5]; //mv
+        solv_access_vols[current_residue - firstResidue + 1][global_rot_iter][1] += atomCoords[atom][6]; //cavity
+        solv_access_vols[current_residue - firstResidue + 1][global_rot_iter][2] += atomCoords[atom][7]; //solvent
+        atomCoords[atom][5] = atomCoords[atom][6] = atomCoords[atom][7] = 0; //reset for next time around
+        
+    }
+}
+
+void repropagate(){
+    for(int i=0; i<=n[1]; i++){
+        for(int j=0; j<=n[2]; j++){
+            for(int k=0; k<=n[3]; k++){
+                if(cavityGrid[i][j][k][1] != 0){ //if this is a cavity or boundary solvent point
+                    if(uf_find(cavityGrid[i][j][k][1]) == uf_find(1)){ //if this is boundary solvent
+                        atomCoords[cavityGrid[i][j][k][0]][7]++; //increment that atoms boundary solvent
+                    }
+                    else{
+                        atomCoords[cavityGrid[i][j][k][0]][6]++; //increment that atoms cavity
+                    }
+                }
+            }
+        }
+    }
+
+    //delete the cavity grid for next rotation
+    for(int i = 0; i<=n[1]; i++){
+        for(int j = 0; j<=n[2]; j++){
+            for(int k = 0; k<=n[3]; k++){
+                delete [] cavityGrid[i][j][k];
+            }
+            delete [] cavityGrid[i][j];
+        }
+        delete [] cavityGrid[i];
+    }
+    delete [] cavityGrid;
+}
+
 void finalDataCollectionRun(float probe, float grid, string PDBFileName){
     
     
@@ -817,14 +924,16 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
     ofstream microvoidHistFile;
     ofstream summaryFile;
     ofstream largestMVFile;
+    ofstream residueVolsFile;
     
     ostringstream gridString; gridString << setprecision(3) << grid; 
     ostringstream ratioString; ratioString << setprecision(3) << probe / grid; 
-    summaryFile.open((PDBFileName+"-a"+gridString.str()+"-ratio"+ratioString.str()+"-"+connectivity_type+"-summary.txt").c_str());
-    largestMVFile.open((PDBFileName+"-a"+gridString.str()+"-ratio"+ratioString.str()+"-"+connectivity_type+"-mvLcsze.txt").c_str());  
-    voidHistFile.open((PDBFileName + "-a" + gridString.str() + "-ratio" + ratioString.str() + "-"+connectivity_type +"-voidHist.txt").c_str());
-    microvoidHistFile.open ((PDBFileName+"-a"+gridString.str()+"-ratio"+ratioString.str()+"-" + connectivity_type +"-microvoidHist.txt").c_str());
-    
+    summaryFile.open((PDBFileName+"-a"+gridString.str()+"-ratio"+ratioString.str()+"-"+connectivity_type+"-solv-summary.txt").c_str());
+    largestMVFile.open((PDBFileName+"-a"+gridString.str()+"-ratio"+ratioString.str()+"-"+connectivity_type+"-solv-mvLcsze.txt").c_str());  
+    voidHistFile.open((PDBFileName + "-a" + gridString.str() + "-ratio" + ratioString.str() + "-"+connectivity_type +"-solv-voidHist.txt").c_str());
+    microvoidHistFile.open ((PDBFileName+"-a"+gridString.str()+"-ratio"+ratioString.str()+"-" + connectivity_type +"-solv-microvoidHist.txt").c_str());
+    residueVolsFile.open ((PDBFileName+"-a"+gridString.str()+"-ratio"+ratioString.str()+"-" + connectivity_type +"-solv-residueVols.txt").c_str());
+
     vector <int> voidHist;
     vector <int> microvoidHist;  
     largestVoid = 0;
@@ -839,6 +948,8 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
         generateHash();
         hoshenKopelman(solvGap, probe, grid); //propagate through our grid - percolation
         clusterSizeCounter(minVoidSize, probe, grid ); //process void and microvoid statistics, prints out largest mv to largest mv cluster file
+        repropagate(); //gets our cavity and solvent values into the residues
+        residueSum();
         algorithmTime = clock() - algorithmTime; //total alg. time includes hash generation, HK algorithm, and final cluster counting
         
         if (voidHist.size() <= rotLargestVoid) {
@@ -883,6 +994,16 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
             
     microvoidHist.clear();
     voidHist.clear();  
+
+    //totals
+    float solv_acc_mv_total[global_rotation_max];
+    float solv_acc_cav_total[global_rotation_max];
+    float solv_acc_solv_total[global_rotation_max];
+    for(int i=0; i<global_rotation_max; i++){
+        solv_acc_mv_total[i] = 0;
+        solv_acc_cav_total[i] = 0;
+        solv_acc_solv_total[i] = 0;
+    }
     
     //avgs
     float prot_vol_gdpts_avg = 0; float mv_gdpts_avg = 0; float cav_gdpts_avg = 0;
@@ -892,6 +1013,9 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
     float prot_vol_avg = 0; float mv_vol_avg = 0;
     float cav_vol_avg = 0; float solv_vol_avg = 0;
     float total_vol_avg = 0; float packing_density_avg = 0; float cpu_time_avg = 0;
+    float residue_mv_avg[residueCount+1]; float residue_cav_avg[residueCount+1];
+    float residue_solv_avg[residueCount+1];
+    float solv_acc_mv_total_avg = 0; float solv_acc_cav_total_avg = 0; float solv_acc_solv_total_avg = 0;
     
     //stddv
     float prot_vol_gdpts_stderr = 0; float mv_gdpts_stderr = 0; float cav_gdpts_stderr = 0;
@@ -901,7 +1025,16 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
     float prot_vol_stderr = 0; float mv_vol_stderr = 0;
     float cav_vol_stderr = 0; float solv_vol_stderr = 0;
     float total_vol_stderr = 0; float packing_density_stderr = 0; float cpu_time_stderr = 0;
+    float residue_mv_stderr[residueCount+1]; float residue_cav_stderr[residueCount+1];
+    float residue_solv_stderr[residueCount+1];
+    float solv_acc_mv_total_stderr = 0; float solv_acc_cav_total_stderr = 0; float solv_acc_solv_total_stderr = 0;
     
+    for(int i=0; i<=residueCount; i++){
+        residue_mv_avg[i] = 0; residue_mv_stderr[i] = 0;
+        residue_cav_avg[i] = 0; residue_cav_stderr[i] = 0;
+        residue_solv_avg[i] = 0; residue_solv_stderr[i] = 0;
+    }
+
     //get avgs first by summing
     for(int i=0; i<global_rotation_max; i++){
         prot_vol_gdpts_avg += glob_prot_vol_gdpts[i];
@@ -921,6 +1054,17 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
         total_vol_avg += glob_total_vol[i];
         packing_density_avg += glob_packing_density[i];
         cpu_time_avg += glob_cpu_time[i];
+        for(int j=1; j<=residueCount; j++){
+            residue_mv_avg[j] += solv_access_vols[j][i][0];
+            solv_acc_mv_total[i] += solv_access_vols[j][i][0];
+            solv_acc_mv_total_avg += solv_access_vols[j][i][0];
+            residue_cav_avg[j] += solv_access_vols[j][i][1];
+            solv_acc_cav_total[i] += solv_access_vols[j][i][1];
+            solv_acc_cav_total_avg += solv_access_vols[j][i][1];
+            residue_solv_avg[j] += solv_access_vols[j][i][2];
+            solv_acc_solv_total[i] += solv_access_vols[j][i][2];
+            solv_acc_solv_total_avg += solv_access_vols[j][i][2];
+        }
     }
     
     //then dividing them all by global_rotation_max to get average
@@ -941,6 +1085,15 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
     total_vol_avg = total_vol_avg/((float)global_rotation_max);
     packing_density_avg = packing_density_avg/((float)global_rotation_max);
     cpu_time_avg = cpu_time_avg/((float)global_rotation_max);
+    for(int i=1; i<=residueCount; i++){
+        residue_mv_avg[i] = residue_mv_avg[i] / ((float)global_rotation_max);
+        residue_cav_avg[i] = residue_cav_avg[i] / ((float)global_rotation_max);
+        residue_solv_avg[i] = residue_solv_avg[i] / ((float)global_rotation_max);
+    }
+    solv_acc_mv_total_avg = solv_acc_mv_total_avg / ((float)global_rotation_max);
+    solv_acc_cav_total_avg = solv_acc_cav_total_avg / ((float)global_rotation_max);
+    solv_acc_solv_total_avg = solv_acc_solv_total_avg / ((float)global_rotation_max);
+
     
     //lastly, we calculate the standard error = corrected sample std dev / sqrt(n)
     for(int i=0; i<global_rotation_max; i++){
@@ -961,6 +1114,14 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
         total_vol_stderr += (glob_total_vol[i] - total_vol_avg)*(glob_total_vol[i] - total_vol_avg);
         packing_density_stderr += (glob_packing_density[i] - packing_density_avg)*(glob_packing_density[i] - packing_density_avg);
         cpu_time_stderr += (glob_cpu_time[i] - cpu_time_avg)*(glob_cpu_time[i] - cpu_time_avg);
+        for(int j=1; j<=residueCount; j++){
+            residue_mv_stderr[j] += (solv_access_vols[j][i][0] - residue_mv_avg[j])*(solv_access_vols[j][i][0] - residue_mv_avg[j]);
+            residue_cav_stderr[j] += (solv_access_vols[j][i][1] - residue_cav_avg[j])*(solv_access_vols[j][i][1] - residue_cav_avg[j]);
+            residue_solv_stderr[j] += (solv_access_vols[j][i][2] - residue_solv_avg[j])*(solv_access_vols[j][i][2] - residue_solv_avg[j]);
+        }
+        solv_acc_mv_total_stderr += (solv_acc_mv_total[i] - solv_acc_mv_total_avg)*(solv_acc_mv_total[i] - solv_acc_mv_total_avg);
+        solv_acc_cav_total_stderr += (solv_acc_cav_total[i] - solv_acc_cav_total_avg)*(solv_acc_cav_total[i] - solv_acc_cav_total_avg);
+        solv_acc_solv_total_stderr += (solv_acc_solv_total[i] - solv_acc_solv_total_avg)*(solv_acc_solv_total[i] - solv_acc_solv_total_avg);
     }
     
     float correction_factor = (global_rotation_max - 1)*global_rotation_max; //to use corrected sample std dev
@@ -983,6 +1144,14 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
     total_vol_stderr = pow(total_vol_stderr/correction_factor,0.5);
     packing_density_stderr = pow(packing_density_stderr/correction_factor,0.5);
     cpu_time_stderr = pow(cpu_time_stderr/correction_factor,0.5);
+    for(int i=1; i<=residueCount; i++){
+        residue_mv_stderr[i] = pow(residue_mv_stderr[i]/correction_factor,0.5);
+        residue_cav_stderr[i] = pow(residue_cav_stderr[i]/correction_factor,0.5);
+        residue_solv_stderr[i] = pow(residue_solv_stderr[i]/correction_factor,0.5);
+    }
+    solv_acc_mv_total_stderr = pow(solv_acc_mv_total_stderr/correction_factor,0.5);
+    solv_acc_cav_total_stderr = pow(solv_acc_cav_total_stderr/correction_factor,0.5);
+    solv_acc_solv_total_stderr = pow(solv_acc_solv_total_stderr/correction_factor,0.5);
     
     //print off our data to the summary file
     summaryFile << grid << "\n";
@@ -1005,10 +1174,48 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
     summaryFile << packing_density_avg << " " << packing_density_stderr << "\n";
     summaryFile << cpu_time_avg << " " << cpu_time_stderr << "\n";
     summaryFile << residueCount << "\n";
+    summaryFile << solv_acc_mv_total_avg << " " << solv_acc_mv_total_stderr << "\n";
+    summaryFile << solv_acc_cav_total_avg << " " << solv_acc_cav_total_stderr << "\n";
+    summaryFile << solv_acc_solv_total_avg << " " << solv_acc_solv_total_stderr << "\n";
+
+    int firstResidue = atomCoords[1][4];
+    //there may be an issue that arises if there is a gap in the residue numbering
+    for(int i = 1; i<=residueCount; i++){ //per residue: mv, cav, solv, mv stderr, cav stderr, solv stderr
+        residueVolsFile << firstResidue + i - 1 << " ";
+        residueVolsFile << residue_mv_avg[i] << " ";
+        residueVolsFile << residue_cav_avg[i] << " ";
+        residueVolsFile << residue_solv_avg[i] << " ";
+        residueVolsFile << residue_mv_stderr[i] << " ";
+        residueVolsFile << residue_cav_stderr[i] << " ";
+        residueVolsFile << residue_solv_stderr[i] << "\n";
+    }
 
     
     summaryFile.close();
     largestMVFile.close();
+}
+
+void basicRun(float probe, float grid, string PDBFileName){
+    int minVoidSize  = ceil((4.0/3.0)*M_PI*(probe*probe*probe)/(grid*grid*grid)); //smallest size a void can be, removes problem voids
+    float solvGap = ceil(grid + maxR_ss + probe*4);   
+    clock_t algorithmTime;
+    global_rot_iter = 0; //we can run it 100 times
+    algorithmTime = clock();
+    generateHash();
+    hoshenKopelman(solvGap, probe, grid); //propagate through our grid - percolation
+    clusterSizeCounter(minVoidSize, probe, grid ); //process void and microvoid statistics, prints out largest mv to largest mv cluster file
+    repropagate(); //gets our cavity and solvent values into the residues
+    residueSum();
+    algorithmTime = clock() - algorithmTime; //total alg. ti
+    int mv_total=0;
+    int solv_total=0;
+    int cav_total=0;
+    for(int j=1; j<=residueCount; j++){
+        mv_total += solv_access_vols[j][0][0];
+        cav_total += solv_access_vols[j][0][1];
+        solv_total += solv_access_vols[j][0][2];
+    }
+    cout << "Total of all gridpoints " << mv_total+cav_total+solv_total << "\n";
 }
 
 
@@ -1052,12 +1259,11 @@ int main(int argc, char** argv) {
     printf ("Protein import took %d clicks (%f seconds).\n",(int)importTime,((float)importTime)/CLOCKS_PER_SEC);
     
     
-//    for (float grid = 0.1; grid <= 1.5; grid += 0.1) {
-//    for (float probe = grid; probe <= 2.5; probe += 0.1) {        
+       
     float solvGap = ceil(grid + maxR_ss + probe*4);
     firstQuadCoordShift(solvGap);
-    finalDataCollectionRun(probe, grid, PDBFileName);
-//    }
-//    }
+    //finalDataCollectionRun(probe, grid, PDBFileName);
+    basicRun(probe,grid,PDBFileName);
+
     return 0;
 }
