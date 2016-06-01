@@ -52,7 +52,7 @@ using namespace bmpg_uncc_edu::util::logger;
 
 const float maxR_ss = 1.8; //this will change depending on input set of vdw radii, largest one in set       
 const float hashSpacing = 3.0;
-const int global_rotation_max = 1;
+const int global_rotation_max = 20;
 
 //spring model parameters
 int maxIter = 1000;//1000; //just to ensure that our spring models eventually converge
@@ -408,11 +408,11 @@ int isBoundaryWater(float x, float y, float z, float boundaryProbe, int& closest
                         if(checkDistance(x,y,z,atomCoords[atom][1],atomCoords[atom][2],
                            atomCoords[atom][3],boundaryProbe,sq_atom_distance)==1){ //atomCoords[atom][0] was 0, but now we have it working!!
                             boundaryFlag = 1;}
-                        atom = gridChain[atom];
                         if(sq_atom_distance <= sq_closest_distance){ //finding the closest atom
                             sq_closest_distance = sq_atom_distance;
                             closest_atom = atom;
                         }
+                        atom = gridChain[atom];
                     }  
                 }
             }
@@ -450,11 +450,11 @@ int voidType(float x, float y, float z, float probe){
                            atomCoords[atom][3],atomCoords[atom][0]+(2*probe),sq_atom_distance)==1){ //if this gridpoint is within distance of an atom
                             atomsWithin[maxAtomsWithin] = atom; maxAtomsWithin++; //store that atoms index
                         }
-                        atom = gridChain[atom];
                         if(sq_atom_distance <= sq_closest_distance){ //finding the closest atom
                             sq_closest_distance = sq_atom_distance;
                             closest_atom = atom;
                         }
+                        atom = gridChain[atom];
                     }  
                 }
             }
@@ -510,23 +510,19 @@ int voidType(float x, float y, float z, float probe){
 
             for(int indx = 1; indx <= 3; indx++){
                 dr_unit[indx] = F_netVec[indx] / (F_net+FLT_MIN); //dr and F_net point along same line
-                //cout << dr_unit[indx] << " ";
                 dr[indx] = dr_mag * dr_unit[indx];
                 test[indx] = test[indx] + dr[indx];
             }
             if(checkDistance(x,y,z,test[1],test[2],
             test[3],probe*1.1)==0){  //jenny ... target probe = probe*1.1
+                atomCoords[closest_atom][5]++;
                 return -1; //must be a microvoid
             } //if 0, then it has moved too far away
             
             prevF_net = F_net;
             prevdr_mag = dr_mag;
             iter++;
-            //cout << iter << " " << F_net << " " << dr_mag <<" " << F_netVec[1] << " " << F_netVec[2] << " " <<F_netVec[3] << "\n";
-            
-            //cout << iter << " " << dr_mag/a_grid << "\n";
-            //assert(iter < maxIter);
-            //cout << "\n";
+
         } while(dr_mag > min_dr_mag && iter < maxIter);
         
         if(checkDistance(x,y,z,test[1],test[2],
@@ -535,14 +531,12 @@ int voidType(float x, float y, float z, float probe){
             return -1; //this grid point is not part of void space (so microvoid)
         }
         
-        //cout << maxAtomsWithin << " " << iter << "\n";
         //find E_spring after we do these iterations
         E_spring = 0;
         for(int count = 0; count < maxAtomsWithin; count++){
             r_mag = mag(atomCoords[atomsWithin[count]][1]-test[1],atomCoords[atomsWithin[count]][2]-test[2],atomCoords[atomsWithin[count]][3]-test[3]);
             if(r_mag < probe+atomCoords[atomsWithin[count]][0]){
                 E_spring = E_spring + (r_mag - (probe+atomCoords[atomsWithin[count]][0]))*(r_mag - (probe+atomCoords[atomsWithin[count]][0]));
-                //cout<<E_spring << "\n";
             }
         }
         
@@ -550,7 +544,6 @@ int voidType(float x, float y, float z, float probe){
             atomCoords[closest_atom][5]++; //add one to the microvoid counter of the nearest atom
             return -1; //microvoid space
         }
-        //cout << x << " " << y << " " << z << "\n";
         return 1; //grid point volume is part of void space 
     }
 }
@@ -675,8 +668,15 @@ int** propagate(int** prevSlice, int** slice, float z, int xIntervals, int yInte
                          
                  }
                  if(hasJoined == -1){ //if it still hasn't been added, make a new cluster
-                     slice[i][j] = uf_make_set(type);
-//                     addAtomToPDB(i*a_grid+(xshift - solvGap),j*a_grid+(yshift - solvGap),z+(zshift - solvGap),type);
+                    slice[i][j] = uf_make_set(type);
+                    boundaryStatus = !!isBoundaryWater(i*grid, j*grid, z, boundaryProbe, closest_atom);
+                    if(type>0){
+                        if(boundaryStatus){ //write the location to the cavityGrid
+                            cavityGrid[i][j][(int)(z/grid)][0] = closest_atom;
+                            cavityGrid[i][j][(int)(z/grid)][1] = slice[i][j];
+                        }
+                    }
+//                     addAtomToPDB(i*a_grid+(xshift - solvGap),j*a_grid+(yshift - solvGap),z+(zshift - solvGap),type); //for visualization
                      //cout << slice[i][j] << " " << clusterSize[slice[i][j]] << "\n";
                  }
                          
@@ -807,10 +807,10 @@ float clusterSizeCounter(int minVoidSize, float probe, float grid){
                 }
             }else{ //its a false positive
                 numOfErrorGdpts = numOfErrorGdpts + clusterSize[i]; //add to number of error points
-                clusterSize[i] = -1 * clusterSize[i]; //put it into microvoids by making it negative
-                microvoid = microvoid - clusterSize[i]; //we add it to microvoid instead
-                numberOfMicrovoids++;
-                //no need to worry about it being the largest either
+                clusterSize[1] += clusterSize[i]; //add it into boundary solvent since it was a cavity
+                clusterSize[i] = 0;
+                uf_union(clusterLabel[i], 1);
+                //we should eventually visualize the error gridpoints and see if they are indeed boundary solvent
             }
         }
         else if(clusterSize[i] < 0){
@@ -840,6 +840,7 @@ float clusterSizeCounter(int minVoidSize, float probe, float grid){
     cout << "Void volume: " << voidvol << " gridpoints,   " << setprecision(3) << voidvol*pow(grid,3.0) << " angstroms cubed.\n";
     cout << "Microvoid volume: " << microvoid << " gridpoints,   " << setprecision(3) << microvoid*pow(grid,3.0) << " angstroms cubed.\n";
     cout << "Void + Microvoid: " << setprecision(3) << (microvoid+voidvol)*pow(grid,3.0) << " angstroms cubed.\n";
+    cout << "Error gridpoints: " << numOfErrorGdpts << endl;
     cout << "Total Gridpoints: " << clusterSize[0]+clusterSize[1]+voidvol+microvoid << "\n";
     cout << "Packing Density: " << setprecision(3) << (float)clusterSize[0] / totalVol << "\n";    
 
@@ -884,7 +885,7 @@ void residueSum(){
         solv_access_vols[current_residue - firstResidue + 1][global_rot_iter][1] += atomCoords[atom][6]; //cavity
         solv_access_vols[current_residue - firstResidue + 1][global_rot_iter][2] += atomCoords[atom][7]; //solvent
         atomCoords[atom][5] = atomCoords[atom][6] = atomCoords[atom][7] = 0; //reset for next time around
-        
+
     }
 }
 
@@ -895,6 +896,7 @@ void repropagate(){
                 if(cavityGrid[i][j][k][1] != 0){ //if this is a cavity or boundary solvent point
                     if(uf_find(cavityGrid[i][j][k][1]) == uf_find(1)){ //if this is boundary solvent
                         atomCoords[cavityGrid[i][j][k][0]][7]++; //increment that atoms boundary solvent
+                        //cout << cavityGrid[i][j][k][0] << " ";
                     }
                     else{
                         atomCoords[cavityGrid[i][j][k][0]][6]++; //increment that atoms cavity
@@ -903,7 +905,6 @@ void repropagate(){
             }
         }
     }
-
     //delete the cavity grid for next rotation
     for(int i = 0; i<=n[1]; i++){
         for(int j = 0; j<=n[2]; j++){
@@ -1262,8 +1263,8 @@ int main(int argc, char** argv) {
        
     float solvGap = ceil(grid + maxR_ss + probe*4);
     firstQuadCoordShift(solvGap);
-    //finalDataCollectionRun(probe, grid, PDBFileName);
-    basicRun(probe,grid,PDBFileName);
+    finalDataCollectionRun(probe, grid, PDBFileName);
+    //basicRun(probe,grid,PDBFileName);
 
     return 0;
 }
