@@ -52,7 +52,7 @@ using namespace bmpg_uncc_edu::util::logger;
 
 const float maxR_ss = 1.8; //this will change depending on input set of vdw radii, largest one in set       
 const float hashSpacing = 3.0;
-const int global_rotation_max = 25;
+const int global_rotation_max = 2;
 
 //spring model parameters
 int maxIter = 1000;//1000; //just to ensure that our spring models eventually converge
@@ -712,7 +712,7 @@ void hoshenKopelman(float solvGap, float probe, float grid){
 float clusterSizeCounter(int minVoidSize, float probe, float grid){
      for(int i=1; i <= maxCluster; i++){
         if(clusterLabel[i] != i){ //if this is not the canonical cluster label for this equivalence class
-            clusterSize[clusterLabel[i]] = clusterSize[clusterLabel[i]] + clusterSize[i]; //pour the storage from this cluster label into the next one up the chain towards canonical
+            clusterSize[uf_find(clusterLabel[i])] = clusterSize[uf_find(clusterLabel[i])] + clusterSize[i]; //pour the storage from this cluster label into the next one up the chain towards canonical
             clusterSize[i] = 0;
         }
         //cout << i << " " << clusterLabel[i] << " " << clusterSize[i] << "\n";
@@ -1005,6 +1005,7 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
     summaryFile << packing_density_avg << " " << packing_density_stderr << "\n";
     summaryFile << cpu_time_avg << " " << cpu_time_stderr << "\n";
     summaryFile << residueCount << "\n";
+    summaryFile << global_rotation_max << "\n";
 
     
     summaryFile.close();
@@ -1057,6 +1058,7 @@ int main(int argc, char** argv) {
     float solvGap = ceil(grid + maxR_ss + probe*4);
     firstQuadCoordShift(solvGap);
     finalDataCollectionRun(probe, grid, PDBFileName);
+
 //    }
 //    }
     return 0;

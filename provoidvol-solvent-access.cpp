@@ -11,6 +11,8 @@
 
 // 6539 - low and high
 
+//RESIDUE NUMBERS CURRENTLY FROM PROTEIN->NUM_RESIDUES()
+//TO USE FINAL ATOM - FIRST ATOM + 1, MUST REPLACE
 
 #include <vector>
 #include <fstream>
@@ -224,22 +226,7 @@ void getAtomCoords(string PDBFileName) {
 
     
     //find number of atoms
-    atoms = atomCount(protein);
-
-    //get number of residues;
-    residueCount = protein->num_residues();
-    solv_access_vols = (int***) new int** [residueCount+1]; //use first row for totals
-    for(int i=0;i<=residueCount;i++)
-      {
-        solv_access_vols[i] = (int**) new int* [global_rotation_max]; //residues are rows, rotations are columns
-        for(int j=0; j<global_rotation_max; j++){
-            solv_access_vols[i][j] = (int*) new int [3]; //for mv, void, solv
-            for(int k=0; k<3; k++){
-                solv_access_vols[i][j][k] = 0;
-            }
-        }
-      }
-    
+    atoms = atomCount(protein); 
     
     //make pointer to atomCoords 2d array:x,y,z coordinates
     atomCoords = (float**) new float* [atoms+1]; //0 to atoms
@@ -267,7 +254,20 @@ void getAtomCoords(string PDBFileName) {
             addVDW(atomCoords[count][0]); //for doing our transformation
             
             count++;
-    }       
+    }
+    //get number of residues;
+    residueCount = protein->num_residues();//atomCoords[atoms][4]-atomCoords[1][4] + 1; //using protein->num_residues() gives error for some proteins
+    solv_access_vols = (int***) new int** [residueCount+1]; //use first row for totals
+    for(int i=0;i<=residueCount;i++)
+      {
+        solv_access_vols[i] = (int**) new int* [global_rotation_max]; //residues are rows, rotations are columns
+        for(int j=0; j<global_rotation_max; j++){
+            solv_access_vols[i][j] = (int*) new int [3]; //for mv, void, solv
+            for(int k=0; k<3; k++){
+                solv_access_vols[i][j][k] = 0;
+            }
+        }
+      }       
 }
 
 
@@ -775,7 +775,7 @@ void hoshenKopelman(float solvGap, float probe, float grid){
 float clusterSizeCounter(int minVoidSize, float probe, float grid){
      for(int i=1; i <= maxCluster; i++){
         if(clusterLabel[i] != i){ //if this is not the canonical cluster label for this equivalence class
-            clusterSize[clusterLabel[i]] = clusterSize[clusterLabel[i]] + clusterSize[i]; //pour the storage from this cluster label into the next one up the chain towards canonical
+            clusterSize[uf_find(clusterLabel[i])] = clusterSize[uf_find(clusterLabel[i])] + clusterSize[i]; //pour the storage from this cluster label into the next one up the chain towards canonical
             clusterSize[i] = 0;
         }
         //cout << i << " " << clusterLabel[i] << " " << clusterSize[i] << "\n";
@@ -807,9 +807,9 @@ float clusterSizeCounter(int minVoidSize, float probe, float grid){
                 }
             }else{ //its a false positive
                 numOfErrorGdpts = numOfErrorGdpts + clusterSize[i]; //add to number of error points
-                clusterSize[1] += clusterSize[i]; //add it into boundary solvent since it was a cavity
-                clusterSize[i] = 0;
-                uf_union(clusterLabel[i], 1);
+                clusterSize[i] = -1 * clusterSize[i]; //put it into microvoids
+                microvoid = microvoid - clusterSize[i]; //we add it to microvoid instead
+                numberOfMicrovoids++;
                 //we should eventually visualize the error gridpoints and see if they are indeed boundary solvent
             }
         }
@@ -898,7 +898,9 @@ void repropagate(){
                         atomCoords[cavityGrid[i][j][k][0]][7]++; //increment that atoms boundary solvent
                         //cout << cavityGrid[i][j][k][0] << " ";
                     }
-                    else{
+                    else if(clusterSize[uf_find(cavityGrid[i][j][k][1])] < 0){ //it was an error
+                        atomCoords[cavityGrid[i][j][k][0]][5]++; //increment that atoms mv
+                    }else{
                         atomCoords[cavityGrid[i][j][k][0]][6]++; //increment that atoms cavity
                     }
                 }
@@ -1175,6 +1177,7 @@ void finalDataCollectionRun(float probe, float grid, string PDBFileName){
     summaryFile << packing_density_avg << " " << packing_density_stderr << "\n";
     summaryFile << cpu_time_avg << " " << cpu_time_stderr << "\n";
     summaryFile << residueCount << "\n";
+    summaryFile << global_rotation_max << "\n";
     summaryFile << solv_acc_mv_total_avg << " " << solv_acc_mv_total_stderr << "\n";
     summaryFile << solv_acc_cav_total_avg << " " << solv_acc_cav_total_stderr << "\n";
     summaryFile << solv_acc_solv_total_avg << " " << solv_acc_solv_total_stderr << "\n";
@@ -1216,7 +1219,7 @@ void basicRun(float probe, float grid, string PDBFileName){
         cav_total += solv_access_vols[j][0][1];
         solv_total += solv_access_vols[j][0][2];
     }
-    cout << "Total of all gridpoints " << mv_total+cav_total+solv_total << "\n";
+    cout << "Total of all gridpoints: " << mv_total+cav_total+solv_total << "\n";
 }
 
 
